@@ -18,8 +18,8 @@
 
     Formats:
     - AI  : PDF-compatible, linked files embedded.
-    - PNG : transparent background, at RASTER_PPI (default 300 ppi).
-    - JPG : white background, maximum quality, at RASTER_PPI.
+    - PNG : transparent background, 3000 px on the longest edge.
+    - JPG : white background, maximum quality, 3000 px on the longest edge.
             SKIPPED for any artboard whose name contains "rvd"
             (reversed artwork would be invisible on white).
     - PDF : PDF/X-4:2008 (no colour conversion, live transparency).
@@ -48,11 +48,8 @@
     var SCRIPT_NAME = "Export RGB Brand Assets";
     var FILE_SUFFIX = "-rgb";             // added to every file name
     var PDF_PRESET = "[PDF/X-4:2008]";
-    var RASTER_PPI = 300;                 // resolution of PNG and JPG exports
+    var RASTER_LONG_EDGE_PX = 3000;       // PNG/JPG size: pixels on the longest edge
     var JPG_SKIP_PATTERN = /rvd/i;        // artboard names matching this get no JPG
-
-    // Illustrator's raster export works in % of 72 ppi (max ~776%).
-    var RASTER_SCALE = Math.min(RASTER_PPI / 72 * 100, 776);
 
     // ---------- Pre-flight ----------------------------------------
 
@@ -117,8 +114,9 @@
         }
         used[name.toLowerCase()] = true;
 
-        var formats = ["ai", "png", "jpg", "pdf", "svg"];
-        if (JPG_SKIP_PATTERN.test(abName)) formats = ["ai", "png", "pdf", "svg"];
+        // Vector formats first: the raster step rescales the working copy.
+        var formats = ["ai", "pdf", "svg", "png", "jpg"];
+        if (JPG_SKIP_PATTERN.test(abName)) formats = ["ai", "pdf", "svg", "png"];
 
         boards.push({ name: name, formats: formats });
     }
@@ -174,9 +172,14 @@
 
                 // Each format is tried separately so one failure doesn't block the rest.
                 var boardFailed = false;
+                var rasterReady = false;
                 for (f = 0; f < b.formats.length; f++) {
                     var fmt = b.formats[f];
                     try {
+                        if ((fmt === "png" || fmt === "jpg") && !rasterReady) {
+                            scaleForRaster(work, RASTER_LONG_EDGE_PX);
+                            rasterReady = true;
+                        }
                         exportFormat(work, fmt, outFile(destFolder, b.name, fmt, true));
                     } catch (fmtErr) {
                         errors.push(b.name + " (" + fmt.toUpperCase() + "): " + fmtErr.message);
@@ -218,7 +221,7 @@
     // Export helpers
     // ==============================================================
 
-    // Formats are processed in the order ai, png, jpg, pdf, svg.
+    // Formats are processed in the order ai, pdf, svg, png, jpg.
     // saveAs (ai, pdf) re-points the open document at the new file;
     // that's harmless here because the copy is closed without saving.
     function exportFormat(d, fmt, file) {
@@ -266,8 +269,8 @@
         setOpt(o, "artBoardClipping", function () { return true; });
         setOpt(o, "transparency", function () { return true; });
         setOpt(o, "antiAliasing", function () { return true; });
-        setOpt(o, "horizontalScale", function () { return RASTER_SCALE; });
-        setOpt(o, "verticalScale", function () { return RASTER_SCALE; });
+        setOpt(o, "horizontalScale", function () { return 100; });
+        setOpt(o, "verticalScale", function () { return 100; });
         setOpt(o, "saveAsHTML", function () { return false; });
         return o;
     }
@@ -278,8 +281,8 @@
         setOpt(o, "qualitySetting", function () { return 100; });
         setOpt(o, "antiAliasing", function () { return true; });
         setOpt(o, "optimization", function () { return true; });
-        setOpt(o, "horizontalScale", function () { return RASTER_SCALE; });
-        setOpt(o, "verticalScale", function () { return RASTER_SCALE; });
+        setOpt(o, "horizontalScale", function () { return 100; });
+        setOpt(o, "verticalScale", function () { return 100; });
         setOpt(o, "saveAsHTML", function () { return false; });
         return o;
     }
@@ -295,6 +298,67 @@
         setOpt(o, "preserveEditability", function () { return false; });
         setOpt(o, "saveMultipleArtboards", function () { return false; });
         return o;
+    }
+
+    // Scales the working copy (artwork and artboard) so the artboard's
+    // longest edge is targetPx points. Exporting at 100% (72 ppi) then
+    // gives exactly targetPx pixels, with no limit from Illustrator's
+    // maximum export scale. Only used after the vector formats are saved.
+    function scaleForRaster(d, targetPx) {
+        var ab = d.artboards[0];
+        var r = ab.artboardRect; // [left, top, right, bottom]
+        var w = r[2] - r[0];
+        var h = r[1] - r[3];
+        var pct = targetPx / Math.max(w, h) * 100;
+        if (Math.abs(pct - 100) < 0.0001) return;
+
+        // Unlock visible layers so their artwork can be selected.
+        // Hidden layers are left alone: they don't render anyway.
+        var states = [];
+        unlockVisibleLayers(d.layers, states);
+
+        try {
+            var host = firstEditableLayer(d.layers);
+            if (!host) return; // nothing visible to export
+
+            // Invisible marker matching the artboard, scaled with the
+            // artwork so the new artboard lines up exactly.
+            var marker = host.pathItems.rectangle(r[1], r[0], w, h);
+            marker.filled = false;
+            marker.stroked = false;
+
+            d.activate();
+            d.selection = null;
+            app.executeMenuCommand("selectall");
+            app.executeMenuCommand("group");
+            var g = d.selection.length ? d.selection[0] : null;
+            if (!g || g.typename !== "GroupItem") throw new Error("couldn't group artwork for scaling");
+
+            g.resize(pct, pct, true, true, true, true, pct, Transformation.TOPLEFT);
+            ab.artboardRect = marker.geometricBounds;
+            d.selection = null;
+        } finally {
+            for (var s = states.length - 1; s >= 0; s--) {
+                try { states[s].layer.locked = states[s].locked; } catch (e) {}
+            }
+        }
+    }
+
+    function unlockVisibleLayers(layers, states) {
+        for (var k = 0; k < layers.length; k++) {
+            var L = layers[k];
+            if (!L.visible) continue;
+            states.push({ layer: L, locked: L.locked });
+            L.locked = false;
+            unlockVisibleLayers(L.layers, states);
+        }
+    }
+
+    function firstEditableLayer(layers) {
+        for (var k = 0; k < layers.length; k++) {
+            if (layers[k].visible && !layers[k].locked) return layers[k];
+        }
+        return null;
     }
 
     // ==============================================================
