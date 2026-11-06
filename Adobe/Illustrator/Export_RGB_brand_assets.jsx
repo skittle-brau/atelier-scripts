@@ -29,6 +29,9 @@
     (e.g. "Logo_Primary-rgb.png"). If two artboards share a name,
     " (2)", " (3)" etc. is added.
 
+    After choosing the destination you're asked whether to save each
+    format into its own subfolder (AI, PNG, JPG, PDF and SVG).
+
     Your original document is never modified. The script works on
     a temporary copy that it deletes when it's done.
 
@@ -90,6 +93,13 @@
 
     var destFolder = Folder.selectDialog("Choose a destination folder for the exported artboards");
     if (!destFolder) return; // user cancelled
+
+    var useSubfolders = confirm(
+        "Save each file format into its own subfolder?\n\n" +
+        "Yes: files go into AI, PNG, JPG, PDF and SVG subfolders inside the destination.\n" +
+        "No: all files go straight into the destination folder.",
+        true, SCRIPT_NAME
+    );
 
     // ---------- Work out file names and formats -------------------
 
@@ -167,7 +177,7 @@
                 for (f = 0; f < b.formats.length; f++) {
                     var fmt = b.formats[f];
                     try {
-                        exportFormat(work, fmt, outFile(destFolder, b.name, fmt));
+                        exportFormat(work, fmt, outFile(destFolder, b.name, fmt, true));
                     } catch (fmtErr) {
                         errors.push(b.name + " (" + fmt.toUpperCase() + "): " + fmtErr.message);
                         boardFailed = true;
@@ -291,8 +301,17 @@
     // General helpers
     // ==============================================================
 
-    function outFile(folder, baseName, extension) {
-        return new File(folder.fsName + "/" + baseName + FILE_SUFFIX + "." + extension);
+    // Builds the output path. Pass create = true to make the format
+    // subfolder (e.g. "PDF") if it doesn't exist yet.
+    function outFile(folder, baseName, extension, create) {
+        var dir = folder;
+        if (useSubfolders) {
+            dir = new Folder(folder.fsName + "/" + extension.toUpperCase());
+            if (create && !dir.exists && !dir.create()) {
+                throw new Error("couldn't create folder " + dir.fsName);
+            }
+        }
+        return new File(dir.fsName + "/" + baseName + FILE_SUFFIX + "." + extension);
     }
 
     function sanitizeFileName(s) {

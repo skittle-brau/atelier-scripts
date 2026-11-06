@@ -21,6 +21,9 @@
     (e.g. "Logo_Primary-cmyk.ai").
     If two artboards share a name, " (2)", " (3)" etc. is added.
 
+    After choosing the destination you're asked whether to save each
+    format into its own subfolder (AI, PDF and EPS).
+
     Your original document is never modified. The script works on
     a temporary copy that it deletes when it's done.
 
@@ -78,6 +81,13 @@
 
     var destFolder = Folder.selectDialog("Choose a destination folder for the exported artboards");
     if (!destFolder) return; // user cancelled
+
+    var useSubfolders = confirm(
+        "Save each file format into its own subfolder?\n\n" +
+        "Yes: files go into AI, PDF and EPS subfolders inside the destination.\n" +
+        "No: all files go straight into the destination folder.",
+        true, SCRIPT_NAME
+    );
 
     // ---------- Work out file names --------------------------------
 
@@ -143,9 +153,9 @@
                 var issues = prepareArtboard(work, i, convertToCmyk);
                 for (var w = 0; w < issues.length; w++) warnings.push(boardNames[i] + ": " + issues[w]);
 
-                work.saveAs(outFile(destFolder, boardNames[i], "ai"), aiOptions());
-                work.saveAs(outFile(destFolder, boardNames[i], "pdf"), pdfOptions(pdfPresetFound));
-                work.saveAs(outFile(destFolder, boardNames[i], "eps"), epsOptions());
+                work.saveAs(outFile(destFolder, boardNames[i], "ai", true), aiOptions());
+                work.saveAs(outFile(destFolder, boardNames[i], "pdf", true), pdfOptions(pdfPresetFound));
+                work.saveAs(outFile(destFolder, boardNames[i], "eps", true), epsOptions());
 
                 exported++;
             } catch (err) {
@@ -183,8 +193,17 @@
     // Helpers
     // ==============================================================
 
-    function outFile(folder, baseName, extension) {
-        return new File(folder.fsName + "/" + baseName + FILE_SUFFIX + "." + extension);
+    // Builds the output path. Pass create = true to make the format
+    // subfolder (e.g. "PDF") if it doesn't exist yet.
+    function outFile(folder, baseName, extension, create) {
+        var dir = folder;
+        if (useSubfolders) {
+            dir = new Folder(folder.fsName + "/" + extension.toUpperCase());
+            if (create && !dir.exists && !dir.create()) {
+                throw new Error("couldn't create folder " + dir.fsName);
+            }
+        }
+        return new File(dir.fsName + "/" + baseName + FILE_SUFFIX + "." + extension);
     }
 
     function sanitizeFileName(s) {
